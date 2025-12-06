@@ -5,8 +5,6 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(page_title="Cocina", layout="centered", page_icon="📝")
-DATA_FILEPATH = "litcovid.export.all.tsv"
-
 
 @st.cache_data
 def load_data(filepath:str) -> pd.DataFrame:
