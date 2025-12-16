@@ -1,72 +1,108 @@
-#!/usr/bin/env python
-
-import altair as alt
 import pandas as pd
+import sqlite3
 import streamlit as st
+import re
+import unicodedata
 
-st.set_page_config(page_title="Cocina", layout="centered", page_icon="📝")
+st.set_page_config(page_title="Analizador de Cocina", layout="centered", page_icon="🍳")
 
-@st.cache_data
-def load_data(filepath:str) -> pd.DataFrame:
-    """ Load data from local TSV """
-    return pd.read_csv(filepath, sep="\t", skiprows=33).fillna("")
-
-
-def search_dataframe(df:pd.DataFrame, column:str, search_str:str) -> pd.DataFrame:
-    """ Search a column for a substring and return results as df """
-    return df.loc[df[column].str.contains(search_str, case=False)]
+SQLITE_DB = "cocina.db"
 
 
-def generate_barplot(results:pd.DataFrame, count_column:str, top_n:int=10):
-    """load results from search_dataframe() and create barplot """
-    return alt.Chart(results).transform_aggregate(
-        count='count()',
-        groupby=[f'{count_column}']
-    ).transform_window(
-        rank='rank(count)',
-        sort=[alt.SortField('count', order='descending')]
-    ).transform_filter(
-        alt.datum.rank < top_n
-    ).mark_bar().encode(
-        y=alt.Y(f'{count_column}:N', sort='-x'),
-        x='count:Q',
-        tooltip=[f'{count_column}:N', 'count:Q']
-    ).properties(
-        width=700,
-        height=400
-    ).interactive()
+# ===============================
+# Normalizar texto
+# ===============================
+def limpiar_texto(texto: str) -> str:
+    nfkd = unicodedata.normalize('NFKD', texto)
+    texto = "".join(c for c in nfkd if not unicodedata.combining(c))
+    texto = texto.lower()
+    texto = re.sub(r"[^a-zñ\s]", "", texto)
+    return texto
 
 
+# ===============================
+# Cargar palabras desde SQLite
+# ===============================
+def cargar_palabras_cocina():
+    conn = sqlite3.connect(SQLITE_DB)
+    df = pd.read_sql_query("SELECT palabra FROM palabras", conn)
+    conn.close()
+    return df["palabra"].tolist()
+
+
+# ===============================
+# Analizar coincidencias contra la BD (✅ PORCENTAJE CORRECTO)
+# ===============================
+def analizar_texto_cocina(texto: str, palabras_cocina: list):
+    texto_limpio = limpiar_texto(texto)
+    palabras_texto = texto_limpio.split()  # 👈 YA NO ES SET PARA CONTAR BIEN
+    palabras_bd = set(palabras_cocina)
+
+    if not palabras_bd or not palabras_texto:
+        return 0, []
+
+    total_palabras_texto = len(palabras_texto)
+
+    coincidencias = []
+    for palabra in palabras_texto:
+        if palabra in palabras_bd:
+            coincidencias.append(palabra)
+
+    total_coincidencias = len(coincidencias)
+
+    porcentaje = (total_coincidencias / total_palabras_texto) * 100  # ✅ AQUÍ YA ESTA BIEN
+
+    return round(porcentaje, 2), sorted(set(coincidencias)), total_coincidencias, total_palabras_texto
+
+
+# ===============================
+# APP PRINCIPAL
+# ===============================
 def app():
-    """ Search Streamlit App """
-    st.title("Cocina 📝")
+    st.title("🍳 Analizador de Texto de Cocina")
+    st.caption("Analiza qué tanto se relaciona tu texto con el diccionario de cocina")
 
-    # load data from local tsv as dataframe
-    df = load_data(DATA_FILEPATH)
+    palabras_cocina = cargar_palabras_cocina()
+    total_bd = len(palabras_cocina)
 
-    # search box
-    with st.form(key='Search'):
-        text_query = st.text_input(label='Enter text')
-        submit_button = st.form_submit_button(label='Search')
-    
-    # if button is clicked, run search
-    if submit_button:
-        with st.spinner("Searching (this could take a minute...) :hourglass:"):
+    st.info(f"📚 Palabras en la base de datos: {total_bd}")
 
-            # search logic goes here! - search titles for keyword
-            results = search_dataframe(df, "title_e", text_query)
+    texto_usuario = st.text_area(
+        "✍️ Escribe o pega tu texto:",
+        height=200,
+        placeholder="Ejemplo: Hoy voy a freír cebolla en el sartén para hacer una salsa verde..."
+    )
 
-            # notify when search is complete
-            st.success(f"Analisis completo :rocket: — **{len(results):,}** resultados encontrados {len(df):,}  palabras.")
+    if st.button("🔍 Analizar"):
+        if not texto_usuario.strip():
+            st.warning("⚠️ Por favor ingresa un texto.")
+            return
 
-        # display the first 10 results
-        st.table(results.head(n=10))
-
-        # display a bar chart of top journals
-        st.altair_chart(
-            generate_barplot(results, "journal", 10)
+        porcentaje, coincidencias, total_coincidencias, total_palabras = analizar_texto_cocina(
+            texto_usuario, palabras_cocina
         )
 
+        # ===============================
+        # RESULTADOS
+        # ===============================
+        st.subheader("📊 Resultado del análisis")
 
-if __name__ == '__main__':
+        st.metric("Relación con cocina", f"{porcentaje} %")
+        st.write(f"✅ Coincidencias encontradas: **{total_coincidencias} de {total_palabras} palabras del texto**")
+
+        if porcentaje >= 20:
+            st.success("✅ Tu texto está claramente relacionado con cocina 🍽️")
+        elif porcentaje >= 5:
+            st.warning("⚠️ Tu texto tiene relación leve con cocina")
+        else:
+            st.error("❌ Tu texto casi no tiene relación con cocina")
+
+        st.subheader("🔎 Palabras detectadas")
+        if coincidencias:
+            st.write(", ".join(coincidencias))
+        else:
+            st.info("No se detectaron términos de cocina en el texto.")
+
+
+if __name__ == "__main__":
     app()
